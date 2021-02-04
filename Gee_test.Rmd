@@ -1,0 +1,71 @@
+---
+title: "GEE and NDVI"
+output: word
+---
+
+目標:利用R與Google earth engine 界接並下載NDVI資料。再做後續處理
+
+Step. 1 下載package與設置環境
+package開發者之[GitHub](https://github.com/r-spatial/rgee)
+```{r}
+remotes::install_github("r-spatial/rgee")
+library(rgee)
+ee_check()#依照package製作者建議
+#由於發生earthengine-api not installed 現象，根據建議更新Miniconda，
+#並依據作者建議，執行下列步驟設定環境參照 https://r-spatial.github.io/rgee/articles/setup.html
+ee_install(py_env = "rgee")
+#使用下列函數確定環境設置
+
+Sys.getenv("EARTHENGINE_PYTHON")
+Sys.getenv("EARTHENGINE_ENV")
+#仍未解決問題
+```
+
+
+Step. 2 嘗試下載圖層
+2.1 library集中處
+```{r}
+library(rgee)
+library(sf)#處理3維資料
+library(magick)#影像處理 package
+```
+
+2.2 基礎資料設定
+```{r}
+ee_Initialize(emai="ecologykuo@smail.nchu.edu.tw")#取得gee權限, 每次做事情前都要做
+
+layer <- "MODIS/006/MOD13Q1"#圖層MODIS 16 days vegetation index 250m
+
+mask <- st_read("shp/Taiwan_map/Taiwan_county_fixed.shp",quiet = TRUE) %>% sf_as_ee()#定義查找資料的範圍
+region <- mask$geometry()$bounds() #設定查找範圍
+```
+2.3 下載NDVI資料
+```{r}
+col <- ee$ImageCollection(layer)$
+  select('NDVI')$
+  filterDate('2013-06-01', '2014-08-31')
+test <- col$max()$clip(mask)
+
+
+#################33
+filter <- ee$Filter$equals(leftField = 'doy', rightField = 'doy')
+
+join <- ee$Join$saveAll('doy_matches')
+joinCol <- ee$ImageCollection(join$apply(distinctDOY, col, filter))
+
+comp <- joinCol$map(function(img) {
+  doyCol = ee$ImageCollection$fromImages(
+    img$get('doy_matches')
+  )
+  doyCol$reduce(ee$Reducer$median())
+})
+
+rgbVis <- comp$map(function(img) {
+  do.call(img$visualize, visParams) %>% 
+    ee$Image$clip(mask)
+})
+
+```
+
+
+

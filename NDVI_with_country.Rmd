@@ -1,0 +1,73 @@
+---
+title: "GEE_下載資料處理"
+output: word
+---
+目標：處理下載後的向量資料
+批次將NDVI資料與縣市圖層結合
+再計算各縣市的NDVI值變化
+
+## 1. 載入package
+```{r}
+library(sf)
+library(data.table)
+library(beepr)#提醒音
+library(ggplot2)
+library(raster)
+library(tidyverse)
+library(parallel) #平行演算用package
+```
+## 2. 載入圖層檔案並運算
+
+```{r}
+tai_coun <- st_read("shp/Taiwan_map/Taiwan_county_fixed.shp")
+n_list <-list.files("gee_NDVI")
+base <- data.table(id=tai_coun$COUNTYID,eng=tai_coun$COUNTYENG)
+ext_vi <- function(i){
+  ndvi_test <-raster(paste0("gee_NDVI/",n_list[i])) 
+  r <- raster::extract(ndvi_test,tai_coun, fun = mean, na.rm = TRUE)
+  r <- as.data.table(r)
+  return(r)
+}#用lapply會傳回list
+
+ptm <- proc.time()
+result <- lapply(c(1:20), ext_vi)
+
+forTime <- proc.time() - ptm  # 結束計時器
+r <- do.call(bind_cols,result)
+beep(2)
+forTime
+class(r)
+colnames(r) <- as.character(c(2001:2020))
+r_ndvi <-cbind(base,r) %>% melt(,id.vars=c('id','eng')) 
+setnames(r_ndvi,c("variable","value"),c("year","NDVI_avg"))
+```
+## 3. 繪圖
+```{r}
+r_ndvi[,NDVI_avg:=NDVI_avg/10000][,year_sca:=year(as.Date(year,format='%Y'))]
+ggplot(r_ndvi[year_sca>2002],aes(x=year_sca,y=NDVI_avg,color=id))+
+  geom_line()
+ggsave("plot/NDVI_by_country.jpeg",width=6,height=5,dpi=600)
+```
+
+## 4. 使用平行運算方式處理
+平行運算是將數據分散到CPU上各個核心同步做計算。
+所以必須把function中需要用到的變數與package事先載入各節點。部屬變數是使用`clusterExport()`，部屬package是使用`clusterEvalQ()`
+```{r}
+
+myCoreNums <- detectCores() #查詢CPU核心數
+cl <- makeCluster(myCoreNums-1) #運算的核心-2
+clusterExport(cl, c("n_list","tai_coun"))               # 部屬變數
+clusterEvalQ(cl, c(library(tidyverse),
+                   library(data.table),
+                   library(raster),library(sf)))     #傳入套件
+##運算
+ptm <- proc.time()
+result <- parLapply(cl,c(1:20), ext_vi)
+beep(2)
+forTime <- proc.time() - ptm  # 結束計時器
+r <- do.call(bind_cols,result)
+
+forTime
+stopCluster(cl)
+```
+
